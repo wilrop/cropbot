@@ -1,4 +1,8 @@
 import itertools
+import serial
+import time
+import json
+
 import numpy as np
 import networkx as nx
 
@@ -22,6 +26,7 @@ class CropBot:
         self.graph = nx.grid_2d_graph(width, height).to_directed()
         self.edge_values = defaultdict(int)
         self.vertex_values = defaultdict(int)
+        self.driver = serial.Serial('/dev/ttys009')
 
     @staticmethod
     def calc_distance(state1, state2):
@@ -114,15 +119,15 @@ class CropBot:
             for y in range(min_y, max_y + 1):
                 self.current_risk[x, y] += 1
 
-    def update_interventions(self, response):
+    def update_interventions(self, res_dict):
         """Update the value of a cell when an intervention should take place.
 
         Note: Handle the interventions differently
 
         Args:
-            response (str): The response from the driver with their observation.
-
+            res_dict (Dict): The response from the driver with their observation.
         """
+        response = res_dict['response']
         if response == 'diseased':
             self.update_area()
         elif response == 'pests':
@@ -164,10 +169,19 @@ class CropBot:
             direction (str): The direction to move into.
 
         Returns:
-            str: A response string.
+            Dict: A response dictionary.
         """
-        response = "dead"
-        return response
+        byte_command = f'{direction}\n'.encode('utf-8')
+        self.driver.write(byte_command)
+        byte_response = None
+
+        while byte_response is None:
+            byte_response = self.driver.readline()
+            time.sleep(1)
+
+        res_str = byte_response.decode("utf-8")
+        res_dict = json.loads(res_str)
+        return res_dict
 
     def execute_plan(self, plan):
         """Execute the current monitoring plan.
@@ -177,13 +191,13 @@ class CropBot:
         """
         for next_state in plan:
             direction = self.get_direction_from_next(next_state)
-            response = self.command_driver(direction)
-            if response in ['fail', 'stop']:
+            res_dict = self.command_driver(direction)
+            if res_dict['response'] in ['fail', 'stop']:
                 return False
             else:
                 self.state = next_state
                 self.update_unchecked()
-                self.update_interventions(response)
+                self.update_interventions(res_dict)
         return True
 
     def next_endpoint(self):
