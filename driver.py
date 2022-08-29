@@ -1,5 +1,5 @@
 import time
-
+import json
 import hub
 
 
@@ -26,7 +26,8 @@ class Driver:
         self.flipped = False
         self.commands = {'stop', 'scan', 'forward', 'backward', 'left', 'right'}
 
-        # print(hub.bluetooth.rfcomm_connect('F8:4D:89:81:E6:DC'))
+        #hub.bluetooth.rfcomm_connect('F8:4D:89:81:E6:DC')
+        #time.sleep(5)
         self.bt = hub.BT_VCP()
 
     def switch_left_right(self):
@@ -94,16 +95,41 @@ class Driver:
                     self.drive('forward', num_cells)
                 else:
                     self.drive('backward', num_cells)
+        elif direction == 'stay':
+            pass
         else:
-            raise Exception("Not a valid direction")
+            raise Exception("Not a valid direction: "+ direction)
+
+    def classify_color(self, color):
+        if color == 'red':
+            return {'response': 'diseased'}
+        elif color == 'black':
+            return {'response': 'pests'}
+        elif color == 'yellow':
+            return {'response': 'drought'}
+        elif color == 'blue':
+            return {'response': 'flooding'}
+        else:
+            return {'response': 'normal'}
+
+    def execute_command(self, command):
+        command = command.decode("utf-8")
+        self.move(command, 1)
+        color = self.detect_color()
+        response_dict = self.classify_color(color)
+        response_str = json.dumps(response_dict) + '\n'
+        byte_response = response_str.encode('utf-8')
+        return byte_response
 
     def listen(self):
         while True:
             if self.bt.isconnected():
-                # hub.display.show(hub.Image.HAPPY)
+                hub.display.show(hub.Image.HAPPY)
                 if self.bt.any():
-                    data = self.bt.readline()
-                    hub.display.show(hub.Image.SURPRISED)
+                    hub.display.show(hub.Image.YES)
+                    command = self.bt.readline()
+                    reponse = self.execute_command(command)
+                    self.bt.write(response)
             else:
                 hub.display.show(hub.Image.SAD)
 

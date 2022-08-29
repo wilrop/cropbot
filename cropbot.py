@@ -22,11 +22,11 @@ class CropBot:
         self.current_risk = np.zeros((width, height))
         self.history = np.zeros((width, height, 2))  # History of how many times visited with number of interventions.
         self.distances = self.calc_distances(width, height)
-        self.directions = {(0, 1): "forward", (0, -1): "backward", (-1, 0): "left", (1, 0): "right"}
+        self.directions = {(0, 0): "stay", (0, 1): "forward", (0, -1): "backward", (-1, 0): "left", (1, 0): "right"}
         self.graph = nx.grid_2d_graph(width, height).to_directed()
         self.edge_values = defaultdict(int)
         self.vertex_values = defaultdict(int)
-        self.driver = serial.Serial('/dev/ttys009')
+        self.driver = serial.Serial('/dev/tty.LEGOHubA8E2C19D7ABF')
 
     @staticmethod
     def calc_distance(state1, state2):
@@ -171,13 +171,13 @@ class CropBot:
         Returns:
             Dict: A response dictionary.
         """
-        byte_command = f'{direction}\n'.encode('utf-8')
+        direction = direction + '\n'
+        byte_command = direction.encode('utf-8')
         self.driver.write(byte_command)
-        byte_response = None
-
-        while byte_response is None:
-            byte_response = self.driver.readline()
-            time.sleep(1)
+        print("here?")
+        byte_response = self.driver.readline()
+        print("hi?")
+        print(byte_response)
 
         res_str = byte_response.decode("utf-8")
         res_dict = json.loads(res_str)
