@@ -13,12 +13,12 @@ app = Dash(__name__, title="CropBot Dashboard",
 
 def make_world_state_figure(old_fig):
     try:
-        world_state = pd.read_csv('world_view.csv')
+        world_state = pd.read_csv('world_state.csv')
         fig = px.scatter(world_state,
                          x="X",
                          y="Y",
-                         color="Unvisited",
-                         size='Risk',
+                         color="Risk",
+                         size='Unvisited',
                          hover_data={'X': False,
                                      'Y': False,
                                      'Unvisited': False,
@@ -44,7 +44,8 @@ def make_world_state_figure(old_fig):
             plot_bgcolor='rgba(185, 217, 155, 0.63)'
         )
         return fig
-    except Exception:
+    except Exception as e:
+        app.logger.info(e)
         return old_fig
 
 
@@ -122,7 +123,7 @@ app.layout = html.Div(children=[
     ]),
     dcc.Interval(
         id='monitor-interval',
-        interval=500,
+        interval=200,
         n_intervals=0
     )
 ])
@@ -174,8 +175,8 @@ def handle_preferences(value1, value2, value3, value4, value5):
 
 
 def handle_set_weight(weight1, weight2, weight3):
-    weight1_str = f'Weight for interventions: {weight1}'
-    weight2_str = f'Weight for interventions: {weight2}'
+    weight1_str = f'Weight for frequency: {weight1}'
+    weight2_str = f'Weight for distance: {weight2}'
     weight3_str = f'Weight for interventions: {weight3}'
     return weight1_str, weight2_str, weight3_str, weight1, weight2, weight3
 
@@ -219,7 +220,7 @@ def update_weights(weight1, weight2, weight3, n_clicks, value1, value2, value3, 
     [Input('monitor-interval', 'n_intervals'),
      Input('world-view', 'figure')])
 def update_worldview_figure(n_intervals, old_fig):
-    return update_worldview_figure(old_fig)
+    return make_world_state_figure(old_fig)
 
 
 if __name__ == '__main__':
