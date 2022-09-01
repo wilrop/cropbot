@@ -2,6 +2,7 @@ import itertools
 import serial
 import json
 import time
+import multiprocessing
 
 import numpy as np
 import pandas as pd
@@ -27,7 +28,7 @@ class CropBot:
         self.graph = nx.grid_2d_graph(width, height).to_directed()
         self.edge_values = defaultdict(int)
         self.vertex_values = defaultdict(int)
-        self.driver = serial.Serial('/dev/ttys002', timeout=3, baudrate=4800)
+        self.driver = serial.Serial('/dev/ttys002', timeout=3)
 
     @staticmethod
     def normalise_weights(weights):
@@ -194,6 +195,12 @@ class CropBot:
         move_tpl = tuple(np.array(next_state) - np.array(self.state))
         return self.directions[move_tpl]
 
+    def read_buffer(self, return_dict):
+        print("reading...")
+        driver = serial.Serial('/dev/ttys002')
+        return_dict['response'] = driver.readline()
+        print("read!")
+
     def command_driver(self, direction):
         """Command the driver to move in a specific direction.
 
@@ -206,15 +213,26 @@ class CropBot:
         formatted_direction = direction + '\n'
         byte_command = formatted_direction.encode("utf-8")
         self.driver.write(byte_command)
+        self.driver.flush()
         print('The command: ' + direction)
         start = time.time()
         while 1:
             if self.driver.in_waiting:
-                print("reading...")
-                self.driver.flush()
-                print("- Flushed -")
-                byte_response = self.driver.readline()
-                print("read!")
+                manager = multiprocessing.Manager()
+                return_dict = manager.dict()
+                p = multiprocessing.Process(target=self.read_buffer, name="Reading", args=(return_dict,))
+                p.start()
+                p.join(5)
+
+                if p.is_alive():
+                    print("Failed to respond, retrying...")
+                    p.terminate()
+                    p.join()
+                    return self.command_driver(direction)
+                else:
+                    print(return_dict)
+                    byte_response = return_dict['response']
+
                 res_str = byte_response.decode("utf-8")
 
                 if not res_str.endswith('\n'):

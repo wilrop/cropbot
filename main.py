@@ -8,4 +8,6 @@ def main():
     bot = CropBot(5, 5, [1, 1, 1])
     bot.monitor()
 
-main()
+
+if __name__ == '__main__':
+    main()
