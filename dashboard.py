@@ -25,9 +25,11 @@ def make_world_state_figure(old_fig):
                                      'Risk': False,
                                      'Value': True,
                                      'Robot': False},
-                         color_continuous_scale=px.colors.sequential.Cividis_r,
-                         text='Robot')
-        fig.update_traces(textfont_size=40, textposition='middle center')
+                         color_continuous_scale=px.colors.sequential.Cividis_r)
+        robot_row = world_state.loc[world_state['Robot']].squeeze()
+        robot_x = robot_row['X']
+        robot_y = robot_row['Y']
+        fig.update_traces(textfont_size=40, textposition="middle center")
         fig.update_layout(
             xaxis=dict(
                 tickmode='linear',
@@ -41,11 +43,15 @@ def make_world_state_figure(old_fig):
                 dtick=1,
                 title=''
             ),
-            plot_bgcolor='rgba(185, 217, 155, 0.63)'
+            plot_bgcolor='rgba(185, 217, 155, 0.63)',
         )
+        fig.add_annotation(x=robot_x, y=robot_y,
+                           text="🤖",
+                           showarrow=False,
+                           font={'size': 40})
         return fig
     except Exception as e:
-        app.logger.info(e)
+        app.logger.info(str(e))
         return old_fig
 
 
@@ -123,7 +129,7 @@ app.layout = html.Div(children=[
     ]),
     dcc.Interval(
         id='monitor-interval',
-        interval=200,
+        interval=1000,
         n_intervals=0
     )
 ])

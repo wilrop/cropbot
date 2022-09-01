@@ -272,6 +272,7 @@ class CropBot:
                 self.state = next_state
                 self.update_unchecked()
                 self.update_interventions(res_dict)
+                self.log_world_state()
         return True
 
     def next_endpoint(self):
@@ -290,7 +291,7 @@ class CropBot:
         for vertex in self.graph.nodes:
             world_dict['X'].append(vertex[0])
             world_dict['Y'].append(vertex[1])
-            world_dict['Unvisited'].append(self.unchecked[vertex])
+            world_dict['Unvisited'].append(max(0.001, self.unchecked[vertex]))
             if self.history[vertex][0] == 0:
                 intervention_freq = 0
             else:
@@ -298,7 +299,7 @@ class CropBot:
             intervention_value = self.current_risk[vertex] * (1 + intervention_freq)
             world_dict['Risk'].append(intervention_value)
             world_dict['Value'].append(self.vertex_values[vertex])
-            world_dict['Robot'].append('🤖' if self.state == vertex else '')
+            world_dict['Robot'].append(self.state == vertex)
         df = pd.DataFrame.from_dict(world_dict)
         df.to_csv('world_state.csv', index=False)
 
@@ -318,4 +319,3 @@ class CropBot:
             self.update_edge_weights()
             plan = self.get_plan(endpoint)
             keep_monitoring = self.execute_plan(plan)
-            self.log_world_state()
