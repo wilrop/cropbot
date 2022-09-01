@@ -3,6 +3,7 @@ import serial
 import json
 import time
 import multiprocessing
+import copy
 
 import numpy as np
 import pandas as pd
@@ -29,6 +30,7 @@ class CropBot:
         self.edge_values = defaultdict(int)
         self.vertex_values = defaultdict(int)
         self.driver = serial.Serial('/dev/ttys002', timeout=3)
+        self.log_world_state()
 
     @staticmethod
     def normalise_weights(weights):
@@ -181,7 +183,7 @@ class CropBot:
         Returns:
             List[Tuple[int]]: A list of nodes to go to.
         """
-        return nx.astar_path(self.graph, self.state, target, self.get_weight_for_edge)
+        return nx.astar_path(self.graph, self.state, target, self.get_weight_for_edge)[1:]
 
     def get_direction_from_next(self, next_state):
         """Determine the direction to move from the next state.
@@ -196,10 +198,8 @@ class CropBot:
         return self.directions[move_tpl]
 
     def read_buffer(self, return_dict):
-        print("reading...")
         driver = serial.Serial('/dev/ttys002')
         return_dict['response'] = driver.readline()
-        print("read!")
 
     def command_driver(self, direction):
         """Command the driver to move in a specific direction.
@@ -230,7 +230,6 @@ class CropBot:
                     p.join()
                     return self.command_driver(direction)
                 else:
-                    print(return_dict)
                     byte_response = return_dict['response']
 
                 res_str = byte_response.decode("utf-8")
@@ -245,7 +244,6 @@ class CropBot:
                 print("The response: " + res_str)
                 try:
                     if res_str.startswith('ERROR'):
-                        print(res_str)
                         print("Encountered an error, retrying...")
                         return self.command_driver(direction)
                     else:
@@ -283,7 +281,9 @@ class CropBot:
             Tuple[int]: The optimal end vertex.
         """
         self.update_vertex_values()
-        return max(self.vertex_values, key=self.vertex_values.get)
+        vertex_values = copy.deepcopy(self.vertex_values)
+        del vertex_values[self.state]
+        return max(vertex_values, key=vertex_values.get)
 
     def log_world_state(self):
         world_dict = {'X': [], 'Y': [], 'Unvisited': [], 'Risk': [], 'Value': [], 'Robot': []}
