@@ -1,10 +1,15 @@
-import time
 import json
+import time
+
 import hub
+
+from mindstorms import ColorSensor
 
 
 class Driver:
     def __init__(self, cell_length):
+        self.color_sensor = ColorSensor('D') #self.color_sensor = hub.port.D.device
+
         self.motor_back_move = hub.port.F.motor
         self.motor_front_move = hub.port.C.motor
 
@@ -26,8 +31,8 @@ class Driver:
         self.flipped = False
         self.commands = {'stop', 'scan', 'forward', 'backward', 'left', 'right'}
 
-        #hub.bluetooth.rfcomm_connect('F8:4D:89:81:E6:DC')
-        #time.sleep(5)
+        # hub.bluetooth.rfcomm_connect('F8:4D:89:81:E6:DC')
+        # time.sleep(5)
         self.bt = hub.BT_VCP()
 
     def switch_left_right(self):
@@ -96,9 +101,9 @@ class Driver:
                 else:
                     self.drive('backward', num_cells)
         elif direction == 'stay':
-            pass
+            time.sleep(1)
         else:
-            raise Exception("Not a valid direction: "+ direction)
+            raise Exception("Not a valid direction: " + direction)
 
     def classify_color(self, color):
         if color == 'red':
@@ -107,18 +112,18 @@ class Driver:
             return {'response': 'pests'}
         elif color == 'yellow':
             return {'response': 'drought'}
-        elif color == 'blue':
+        elif color in ['blue', 'cyan']:
             return {'response': 'flooding'}
         else:
             return {'response': 'normal'}
 
     def execute_command(self, command):
-        command = command.decode("utf-8")
+        command = command.decode("utf-8").strip()
         self.move(command, 1)
         color = self.detect_color()
         response_dict = self.classify_color(color)
         response_str = json.dumps(response_dict) + '\n'
-        byte_response = response_str.encode('utf-8')
+        byte_response = response_str.encode("utf-8")
         return byte_response
 
     def listen(self):
@@ -126,15 +131,24 @@ class Driver:
             if self.bt.isconnected():
                 hub.display.show(hub.Image.HAPPY)
                 if self.bt.any():
-                    hub.display.show(hub.Image.YES)
-                    command = self.bt.readline()
-                    reponse = self.execute_command(command)
+                    try:
+                        hub.display.show(hub.Image.YES)
+                        command = self.bt.readline()
+                        response = self.execute_command(command)
+                    except Exception as e:
+                        response = 'ERROR: ' + str(e) + '\n'
+                        response = response.encode("utf-8")
                     self.bt.write(response)
             else:
                 hub.display.show(hub.Image.SAD)
 
     def detect_color(self):
-        return COLOR_SENSOR.get_color()
+        return self.color_sensor.get_color()
+
+
+def turn_debug(direction):
+    driver = Driver(1)
+    driver.turn(direction)
 
 
 def small_demo():
@@ -165,18 +179,26 @@ def command_demo():
     driver.move('right', 1)
 
 
-def remote_command_demo():
+def listen():
     driver = Driver(1)
-    driver.listen()
+    try:
+        driver.listen()
+    except Exception as e:
+        error = 'Error: ' + str(e) + '\n'
+        error_bytes = error.encode('utf-8')
+        driver.bt.write(error_bytes)
 
 
-def turn_debug(direction):
+def check_color():
     driver = Driver(1)
-    driver.turn(direction)
+    while 1:
+        color = driver.detect_color()
+        print(color)
+        time.sleep(1)
 
 
 # turn_debug('left')
 # square_demo("left")
 # square_demo("right")
 # command_demo()
-remote_command_demo()
+listen()

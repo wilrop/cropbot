@@ -1,9 +1,10 @@
 import itertools
 import serial
-import time
 import json
+import time
 
 import numpy as np
+import pandas as pd
 import networkx as nx
 
 from collections import defaultdict
@@ -16,7 +17,7 @@ class CropBot:
     def __init__(self, width, height, weights):
         self.width = width
         self.height = height
-        self.weights = np.array(weights) / sum(weights)  # Make weights sum to one.
+        self.weights = self.normalise_weights(weights)
         self.state = (0, 0)
         self.unchecked = np.zeros((width, height))
         self.current_risk = np.zeros((width, height))
@@ -26,7 +27,20 @@ class CropBot:
         self.graph = nx.grid_2d_graph(width, height).to_directed()
         self.edge_values = defaultdict(int)
         self.vertex_values = defaultdict(int)
-        self.driver = serial.Serial('/dev/tty.LEGOHubA8E2C19D7ABF')
+        self.driver = serial.Serial('/dev/ttys002', timeout=3, baudrate=4800)
+
+    @staticmethod
+    def normalise_weights(weights):
+        """Normalise weights to sum to one.
+
+        Args:
+            weights (List[float]): A list of weights over the objectives.
+
+        Returns:
+            ndarray: An array of weights summing to one.
+        """
+        normalised_weights = np.array(weights) / sum(weights)
+        return normalised_weights
 
     @staticmethod
     def calc_distance(state1, state2):
@@ -39,6 +53,7 @@ class CropBot:
         Returns:
             int: The Manhattan distance between the two.
         """
+
         return abs(state1[0] - state2[0]) + abs(state1[1] - state2[1])
 
     def calc_distances(self, width, height):
@@ -61,7 +76,7 @@ class CropBot:
                 distances[w1, h1, w2, h2] = max_distance - distance  # Flip distances so lower is better.
         return distances
 
-    def get_weight_for_edge(self, start_vertex, end_vertex, attributes):
+    def get_weight_for_edge(self, start_vertex, end_vertex):
         """Get the weight for a given edge.
 
         This is used in computing the optimal path between the current state and the end point.
@@ -69,27 +84,44 @@ class CropBot:
         Args:
             start_vertex (Tuple[int]): The start vertex of the edge.
             end_vertex (Tuple[int]): The end vertex of the edge.
-            attributes (Dict): A dictionary of attributes for an edge.
 
         Returns:
             float: The weight for a given edge.
         """
         return self.edge_values[(start_vertex, end_vertex)]
 
+    @staticmethod
+    def normalise_scalar(x, min_x, max_x):
+        return x if x == 0 else (x - min_x)/(max_x - min_x)
+
     def update_vertex_values(self):
         """Update the values for the vertices in the graph.
 
         This computes the expected value of visiting each vertex by using the weighting of the different objectives.
         """
+        min_unchecked = np.min(self.unchecked)
+        max_unchecked = np.max(self.unchecked)
+
+        min_distance = np.min(self.distances)
+        max_distance = np.max(self.distances)
+
+        intervention_values = []
         for vertex in self.graph.nodes:
-            unchecked = self.weights[0] * self.unchecked[vertex]
-            distance = self.weights[1] * self.distances[self.state + vertex]
             if self.history[vertex][0] == 0:
                 intervention_freq = 0
             else:
                 intervention_freq = self.history[vertex][0] / self.history[vertex][1]
-            intervention_value = self.weights[2] * (self.current_risk[vertex] * (1 + intervention_freq))
-            vertex_value = unchecked + distance + intervention_value
+            intervention_value = self.current_risk[vertex] * (1 + intervention_freq)
+            intervention_values.append(intervention_value)
+
+        min_intervention_value = min(intervention_values)
+        max_intervention_value = max(intervention_values)
+
+        for vertex, intervention_value in zip(self.graph.nodes, intervention_values):
+            unchecked_value = self.weights[0] * self.normalise_scalar(self.unchecked[vertex], min_unchecked, max_unchecked)
+            distance_value = self.weights[1] * self.normalise_scalar(self.distances[self.state + vertex], min_distance, max_distance)
+            intervention_value = self.weights[2] * self.normalise_scalar(intervention_value, min_intervention_value, max_intervention_value)
+            vertex_value = unchecked_value + distance_value + intervention_value
             self.vertex_values[vertex] = vertex_value
 
     def update_edge_weights(self):
@@ -111,9 +143,9 @@ class CropBot:
     def update_area(self):
         """Update the values of an area around an intervention."""
         min_x = max(0, self.state[0] - 1)
-        max_x = min(self.width, self.state[0] + 1)
+        max_x = min(self.width - 1, self.state[0] + 1)
         min_y = max(0, self.state[1] - 1)
-        max_y = min(self.height, self.state[1] + 1)
+        max_y = min(self.height - 1, self.state[1] + 1)
 
         for x in range(min_x, max_x + 1):
             for y in range(min_y, max_y + 1):
@@ -171,16 +203,42 @@ class CropBot:
         Returns:
             Dict: A response dictionary.
         """
-        direction = direction + '\n'
-        byte_command = direction.encode('utf-8')
+        formatted_direction = direction + '\n'
+        byte_command = formatted_direction.encode("utf-8")
         self.driver.write(byte_command)
-        print("here?")
-        byte_response = self.driver.readline()
-        print("hi?")
-        print(byte_response)
+        print('The command: ' + direction)
+        start = time.time()
+        while 1:
+            if self.driver.in_waiting:
+                print("reading...")
+                self.driver.flush()
+                print("- Flushed -")
+                byte_response = self.driver.readline()
+                print("read!")
+                res_str = byte_response.decode("utf-8")
 
-        res_str = byte_response.decode("utf-8")
-        res_dict = json.loads(res_str)
+                if not res_str.endswith('\n'):
+                    print("Failed to respond, retrying...")
+                    return self.command_driver(direction)
+                elif '\r' in res_str:
+                    res_str = res_str.split('\r')[-1]
+
+                res_str = res_str.strip('\n')
+                print("The response: " + res_str)
+                try:
+                    if res_str.startswith('ERROR'):
+                        print(res_str)
+                        print("Encountered an error, retrying...")
+                        return self.command_driver(direction)
+                    else:
+                        res_dict = json.loads(res_str)
+                        break
+                except Exception as e:
+                    raise Exception(e)
+            else:
+                if time.time() - start > 3:
+                    print("Failed to respond, retrying...")
+                    return self.command_driver(direction)
         return res_dict
 
     def execute_plan(self, plan):
@@ -209,10 +267,37 @@ class CropBot:
         self.update_vertex_values()
         return max(self.vertex_values, key=self.vertex_values.get)
 
+    def log_world_state(self):
+        world_dict = {'X': [], 'Y': [], 'Unvisited': [], 'Risk': [], 'Value': [], 'Robot': []}
+        for vertex in self.graph.nodes:
+            world_dict['X'].append(vertex[0])
+            world_dict['Y'].append(vertex[1])
+            world_dict['Unvisited'].append(self.unchecked[vertex])
+            if self.history[vertex][0] == 0:
+                intervention_freq = 0
+            else:
+                intervention_freq = self.history[vertex][0] / self.history[vertex][1]
+            intervention_value = self.current_risk[vertex] * (1 + intervention_freq)
+            world_dict['Risk'].append(intervention_value)
+            world_dict['Value'].append(self.vertex_values[vertex])
+            world_dict['Robot'].append('🤖' if self.state == vertex else '')
+        df = pd.DataFrame.from_dict(world_dict)
+        df.to_csv('world_state.csv', index=False)
+
+    def read_weights(self):
+        try:
+            weight_df = pd.read_csv('weights.csv')
+            weights = weight_df.iloc[0].tolist()
+            self.weights = self.normalise_weights(weights)
+        except Exception:
+            pass
+
     def monitor(self):
         keep_monitoring = True
         while keep_monitoring:
+            self.read_weights()
             endpoint = self.next_endpoint()
             self.update_edge_weights()
             plan = self.get_plan(endpoint)
             keep_monitoring = self.execute_plan(plan)
+            self.log_world_state()
