@@ -5,7 +5,7 @@ import os
 
 
 def main():
-    bot = CropBot(5, 5, [1, 1, 1])
+    bot = CropBot(4, 5, [1, 1, 1])
     bot.monitor()
 
 

@@ -173,8 +173,8 @@ def handle_preferences(value1, value2, value3, value4, value5):
     else:
         weight1 -= 2
 
-    weight1_str = f'Weight for interventions: {weight1}'
-    weight2_str = f'Weight for interventions: {weight2}'
+    weight1_str = f'Weight for frequency: {weight1}'
+    weight2_str = f'Weight for distance: {weight2}'
     weight3_str = f'Weight for interventions: {weight3}'
 
     return weight1_str, weight2_str, weight3_str, weight1, weight2, weight3
@@ -230,4 +230,4 @@ def update_worldview_figure(n_intervals, old_fig):
 
 
 if __name__ == '__main__':
-    app.run_server(debug=True)
+    app.run_server(debug=False)

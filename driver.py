@@ -25,8 +25,10 @@ class Driver:
         self.turn_sleep = 1.5
         self.move_speed_0 = -25
         self.move_speed_1 = - self.move_speed_0
+        self.regular_move_degrees = 400
+        self.sideways_move_degrees = 400
         self.turn_speed = -10
-        self.turn_degrees = 33
+        self.turn_degrees = 32
         self.motor_pos = 0
         self.flipped = False
         self.commands = {'stop', 'scan', 'forward', 'backward', 'left', 'right'}
@@ -65,7 +67,10 @@ class Driver:
         time.sleep(self.turn_sleep)
 
     def drive(self, direction, num_cells):
-        degrees = 360 * num_cells * self.cell_length
+        if self.motor_pos != 0:
+            degrees = self.sideways_move_degrees * num_cells * self.cell_length
+        else:
+            degrees = self.regular_move_degrees * num_cells * self.cell_length
 
         if direction == 'forward':
             speed_0 = self.move_speed_0
@@ -105,23 +110,10 @@ class Driver:
         else:
             raise Exception("Not a valid direction: " + direction)
 
-    def classify_color(self, color):
-        if color == 'red':
-            return {'response': 'diseased'}
-        elif color == 'black':
-            return {'response': 'pests'}
-        elif color == 'yellow':
-            return {'response': 'drought'}
-        elif color in ['blue', 'cyan']:
-            return {'response': 'flooding'}
-        else:
-            return {'response': 'normal'}
-
     def execute_command(self, command):
         command = command.decode("utf-8").strip()
         self.move(command, 1)
-        color = self.detect_color()
-        response_dict = self.classify_color(color)
+        response_dict = self.detect_color()
         response_str = json.dumps(response_dict) + '\n'
         byte_response = response_str.encode("utf-8")
         return byte_response
@@ -143,12 +135,17 @@ class Driver:
                 hub.display.show(hub.Image.SAD)
 
     def detect_color(self):
-        return self.color_sensor.get_color()
+        response_dict = {'response': self.color_sensor.get_color()}
+        return response_dict
 
 
 def turn_debug(direction):
     driver = Driver(1)
     driver.turn(direction)
+
+def move_debug(direction):
+    driver = Driver(1)
+    driver.move(direction, 1)
 
 
 def small_demo():
@@ -197,8 +194,12 @@ def check_color():
         time.sleep(1)
 
 
-# turn_debug('left')
-# square_demo("left")
-# square_demo("right")
+#turn_debug('right')
+#turn_debug('left')
+#move_debug('right')
+#move_debug('left')
+#move_debug('forward')
+#square_demo("left")
+#square_demo("right")
 # command_demo()
 listen()

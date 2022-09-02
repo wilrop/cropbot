@@ -154,6 +154,18 @@ class CropBot:
             for y in range(min_y, max_y + 1):
                 self.current_risk[x, y] += 1
 
+    def classify_color(self, color):
+        if color == 'red':
+            return 'diseased'
+        elif color == 'black':
+            return 'pests'
+        elif color == 'yellow':
+            return 'drought'
+        elif color in ['blue', 'cyan']:
+            return'flooding'
+        else:
+            return 'normal'
+
     def update_interventions(self, res_dict):
         """Update the value of a cell when an intervention should take place.
 
@@ -162,14 +174,15 @@ class CropBot:
         Args:
             res_dict (Dict): The response from the driver with their observation.
         """
-        response = res_dict['response']
-        if response == 'diseased':
+        color = res_dict['response']
+        classification = self.classify_color(color)
+        if classification == 'diseased':
             self.update_area()
-        elif response == 'pests':
+        elif classification == 'pests':
             self.update_area()
-        elif response == 'flooding':
+        elif classification == 'flooding':
             self.update_area()
-        elif response == 'drought':
+        elif classification == 'drought':
             self.update_area()
         else:
             self.current_risk[self.state] = 0
