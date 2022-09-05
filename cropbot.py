@@ -1,35 +1,43 @@
-import itertools
-import serial
-import json
-import time
-import multiprocessing
 import copy
-
-import numpy as np
-import pandas as pd
-import networkx as nx
-
+import itertools
+import json
+import multiprocessing
 from collections import defaultdict
+
+import networkx as nx
+import numpy as np
+import serial
 
 
 class CropBot:
     """
     A class representing the CropBot.
     """
-    def __init__(self, width, height, weights):
+
+    def __init__(self, width, height, weights, start=(0, 0), prior_sick=0.1, prior_conditional_sick=0.5):
         self.width = width
         self.height = height
         self.weights = self.normalise_weights(weights)
-        self.state = (0, 0)
+        self.state = start
+        self.plan = []
+
+        self.serial_port = '/dev/ttys002'
+        self.driver = serial.Serial(self.serial_port)
+        self.directions = {(0, 0): 'stay', (0, 1): 'forward', (0, -1): 'backward', (-1, 0): 'left', (1, 0): 'right'}
+        self.driver_delay = 15
+
         self.unchecked = np.zeros((width, height))
+        self.inverse_distances = self.calc_inverse_distances(width, height)
         self.current_risk = np.zeros((width, height))
-        self.history = np.zeros((width, height, 2))  # History of how many times visited with number of interventions.
-        self.distances = self.calc_distances(width, height)
-        self.directions = {(0, 0): "stay", (0, 1): "forward", (0, -1): "backward", (-1, 0): "left", (1, 0): "right"}
+        self.risk_model = np.zeros((width, height, 2))
+        self.prior_sick = prior_sick
+        self.prior_conditional_sick = prior_conditional_sick
+
         self.graph = nx.grid_2d_graph(width, height).to_directed()
         self.edge_values = defaultdict(int)
         self.vertex_values = defaultdict(int)
-        self.driver = serial.Serial('/dev/ttys002', timeout=3)
+        self.risk_values = defaultdict(int)
+
         self.log_world_state()
 
     @staticmethod
@@ -59,8 +67,8 @@ class CropBot:
 
         return abs(state1[0] - state2[0]) + abs(state1[1] - state2[1])
 
-    def calc_distances(self, width, height):
-        """Compute the distances between every pair of nodes.
+    def calc_inverse_distances(self, width, height):
+        """Compute the inverse distances between every pair of nodes.
 
         Args:
             width (int): The width of the environment.
@@ -76,7 +84,7 @@ class CropBot:
                 distance = self.calc_distance(state1, state2)
                 w1, h1 = state1
                 w2, h2 = state2
-                distances[w1, h1, w2, h2] = max_distance - distance  # Flip distances so lower is better.
+                distances[w1, h1, w2, h2] = max_distance - distance
         return distances
 
     def get_weight_for_edge(self, start_vertex, end_vertex):
@@ -95,43 +103,64 @@ class CropBot:
 
     @staticmethod
     def normalise_scalar(x, min_x, max_x):
-        return x if x == 0 else (x - min_x)/(max_x - min_x)
+        return x if x == 0 else (x - min_x) / (max_x - min_x)
+
+    def compute_intervention_freq(self, vertex):
+        """Compute the intervention frequency for a given vertex.
+
+        Args:
+            vertex (Tuple[int]): The coordinates of the vertex.
+
+        Returns:
+            float: The intervention frequency.
+        """
+        if self.risk_model[vertex][0] == 0:
+            intervention_freq = 0
+        else:
+            intervention_freq = self.risk_model[vertex][0] / self.risk_model[vertex][1]
+        return intervention_freq
 
     def update_vertex_values(self):
         """Update the values for the vertices in the graph.
 
         This computes the expected value of visiting each vertex by using the weighting of the different objectives.
+
+        Note:
+            Higher vertex values are better.
         """
         min_unchecked = np.min(self.unchecked)
         max_unchecked = np.max(self.unchecked)
 
-        min_distance = np.min(self.distances)
-        max_distance = np.max(self.distances)
+        min_inv_dist = np.min(self.inverse_distances)
+        max_inv_dist = np.max(self.inverse_distances)
 
-        intervention_values = []
+        risk_values = []
         for vertex in self.graph.nodes:
-            if self.history[vertex][0] == 0:
-                intervention_freq = 0
-            else:
-                intervention_freq = self.history[vertex][0] / self.history[vertex][1]
-            intervention_value = self.current_risk[vertex] * (1 + intervention_freq)
-            intervention_values.append(intervention_value)
+            intervention_freq = self.compute_intervention_freq(vertex)
+            risk_value = self.current_risk[vertex] * (1 + intervention_freq)
+            risk_values.append(risk_value)
 
-        min_intervention_value = min(intervention_values)
-        max_intervention_value = max(intervention_values)
+        min_intervention_value = min(risk_values)
+        max_intervention_value = max(risk_values)
 
-        for vertex, intervention_value in zip(self.graph.nodes, intervention_values):
-            unchecked_value = self.weights[0] * self.normalise_scalar(self.unchecked[vertex], min_unchecked, max_unchecked)
-            distance_value = self.weights[1] * self.normalise_scalar(self.distances[self.state + vertex], min_distance, max_distance)
-            intervention_value = self.weights[2] * self.normalise_scalar(intervention_value, min_intervention_value, max_intervention_value)
-            vertex_value = unchecked_value + distance_value + intervention_value
+        for vertex, risk_value in zip(self.graph.nodes, risk_values):
+            unchecked_value = self.normalise_scalar(self.unchecked[vertex], min_unchecked, max_unchecked)
+            distance_value = self.normalise_scalar(self.inverse_distances[self.state + vertex], min_inv_dist,
+                                                   max_inv_dist)
+            risk_value = self.normalise_scalar(risk_value, min_intervention_value, max_intervention_value)
+            vertex_value = self.weights[0] * unchecked_value + self.weights[1] * distance_value + self.weights[
+                2] * risk_value
+            self.risk_values[vertex] = risk_value
             self.vertex_values[vertex] = vertex_value
 
     def update_edge_weights(self):
         """Update the weights for all edges.
 
-        This scales the value of the end vertex such that best edges have lowest weight. We can later use these weights
-        in a path finding algorithm to compute the optimal trajectory.
+        The value of the end vertex is inverted so that the best edges have the lowest weight. These weights are later
+        used in a path finding algorithm to compute the optimal trajectory.
+
+        Note:
+            Lower edge values are better such that they can be used in the shortest path finding algorithm.
         """
         max_weight = max(self.vertex_values.values()) + 1
 
@@ -154,15 +183,22 @@ class CropBot:
             for y in range(min_y, max_y + 1):
                 self.current_risk[x, y] += 1
 
-    def classify_color(self, color):
+    @staticmethod
+    def classify_color(color):
+        """Classify an observed color by the driver.
+
+        Args:
+            color (str): The observed color.
+
+        Returns:
+            str: A classification of the possible risk.
+        """
         if color == 'red':
             return 'diseased'
-        elif color == 'black':
-            return 'pests'
         elif color == 'yellow':
             return 'drought'
         elif color in ['blue', 'cyan']:
-            return'flooding'
+            return 'flooding'
         else:
             return 'normal'
 
@@ -174,7 +210,7 @@ class CropBot:
         Args:
             res_dict (Dict): The response from the driver with their observation.
         """
-        color = res_dict['response']
+        color = res_dict['color']
         classification = self.classify_color(color)
         if classification == 'diseased':
             self.update_area()
@@ -192,11 +228,8 @@ class CropBot:
 
         Args:
             target (Tuple[int]): The required end state.
-
-        Returns:
-            List[Tuple[int]]: A list of nodes to go to.
         """
-        return nx.astar_path(self.graph, self.state, target, self.get_weight_for_edge)[1:]
+        self.plan = nx.astar_path(self.graph, self.state, target, self.get_weight_for_edge)[1:]
 
     def get_direction_from_next(self, next_state):
         """Determine the direction to move from the next state.
@@ -211,8 +244,67 @@ class CropBot:
         return self.directions[move_tpl]
 
     def read_buffer(self, return_dict):
-        driver = serial.Serial('/dev/ttys002')
+        """Read the buffer in a separate process.
+
+        Args:
+            return_dict (Dict): A shared dictionary between processes to record read messages.
+        """
+        driver = serial.Serial(self.serial_port)
         return_dict['response'] = driver.readline()
+
+    @staticmethod
+    def encode_command(command):
+        """Encode a command for the driver.
+
+        Args:
+            command (str): The command to send to the driver.
+
+        Returns:
+            bytes: An encoded command.
+        """
+        return command.encode('utf-8')
+
+    @staticmethod
+    def decode_response(byte_response):
+        """Decode a response from the driver.
+
+        Args:
+            byte_response (bytes): A response in bytes.
+
+        Returns:
+            str: A str containing the byte response.
+        """
+        return byte_response.decode('utf-8')
+
+    @staticmethod
+    def format_response(res_str):
+        """Format the response from the driver.
+
+        Args:
+            res_str (str): A driver response as a string.
+
+        Returns:
+                str: A response string stripped of useless info and trailing symbols.
+        """
+        if not res_str.endswith('\n'):
+            return False
+
+        elif '\r' in res_str:
+            res_str = res_str.split('\r')[-1]
+
+        return res_str.strip('\n')
+
+    @staticmethod
+    def format_command(command):
+        """Format a command for the driver.
+
+        Args:
+            command (str): A command for the driver.
+
+        Returns:
+            str: A command with a trailing newline added.
+        """
+        return command + '\n'
 
     def command_driver(self, direction):
         """Command the driver to move in a specific direction.
@@ -223,69 +315,59 @@ class CropBot:
         Returns:
             Dict: A response dictionary.
         """
-        formatted_direction = direction + '\n'
-        byte_command = formatted_direction.encode("utf-8")
-        self.driver.write(byte_command)
+        formatted_direction = self.format_command(direction)
+        encoded_direction = self.encode_command(formatted_direction)
+        self.driver.write(encoded_direction)
         self.driver.flush()
         print('The command: ' + direction)
-        start = time.time()
-        while 1:
-            if self.driver.in_waiting:
-                manager = multiprocessing.Manager()
-                return_dict = manager.dict()
-                p = multiprocessing.Process(target=self.read_buffer, name="Reading", args=(return_dict,))
-                p.start()
-                p.join(5)
 
-                if p.is_alive():
-                    print("Failed to respond, retrying...")
-                    p.terminate()
-                    p.join()
+        while 1:
+            manager = multiprocessing.Manager()
+            return_dict = manager.dict()
+            p = multiprocessing.Process(target=self.read_buffer, name='Reading', args=(return_dict,))
+            p.start()
+            p.join(self.driver_delay)
+
+            if p.is_alive():
+                print('Failed to respond, retrying...')
+                p.terminate()
+                p.join()
+                return self.command_driver(direction)
+            else:
+                byte_response = return_dict['response']
+
+            res_str = self.decode_response(byte_response)
+            response = self.format_response(res_str)
+
+            if not response:
+                return self.command_driver(direction)
+
+            print('The response: ' + res_str)
+            try:
+                if res_str.startswith('ERROR'):
+                    print('Encountered an error, retrying...')
                     return self.command_driver(direction)
                 else:
-                    byte_response = return_dict['response']
-
-                res_str = byte_response.decode("utf-8")
-
-                if not res_str.endswith('\n'):
-                    print("Failed to respond, retrying...")
-                    return self.command_driver(direction)
-                elif '\r' in res_str:
-                    res_str = res_str.split('\r')[-1]
-
-                res_str = res_str.strip('\n')
-                print("The response: " + res_str)
-                try:
-                    if res_str.startswith('ERROR'):
-                        print("Encountered an error, retrying...")
-                        return self.command_driver(direction)
-                    else:
-                        res_dict = json.loads(res_str)
-                        break
-                except Exception as e:
-                    raise Exception(e)
-            else:
-                if time.time() - start > 3:
-                    print("Failed to respond, retrying...")
-                    return self.command_driver(direction)
+                    res_dict = json.loads(res_str)
+                    break
+            except Exception as e:
+                raise Exception(e)
         return res_dict
 
-    def execute_plan(self, plan):
-        """Execute the current monitoring plan.
-
-        Args:
-            plan (List[Tuple[int]]): A list of nodes to go to.
-        """
-        for next_state in plan:
+    def execute_plan(self):
+        """Execute the current monitoring plan."""
+        while self.plan:
+            next_state = self.plan.pop(0)
             direction = self.get_direction_from_next(next_state)
             res_dict = self.command_driver(direction)
-            if res_dict['response'] in ['fail', 'stop']:
-                return False
-            else:
+
+            if res_dict['success']:
                 self.state = next_state
                 self.update_unchecked()
                 self.update_interventions(res_dict)
                 self.log_world_state()
+            else:
+                return False
         return True
 
     def next_endpoint(self):
@@ -300,35 +382,42 @@ class CropBot:
         return max(vertex_values, key=vertex_values.get)
 
     def log_world_state(self):
-        world_dict = {'X': [], 'Y': [], 'Unvisited': [], 'Risk': [], 'Value': [], 'Robot': []}
+        """Log the world state for visualisation by the dashboard."""
+        world_dict = defaultdict(list)
+
         for vertex in self.graph.nodes:
             world_dict['X'].append(vertex[0])
             world_dict['Y'].append(vertex[1])
-            world_dict['Unvisited'].append(max(0.001, self.unchecked[vertex]))
-            if self.history[vertex][0] == 0:
-                intervention_freq = 0
-            else:
-                intervention_freq = self.history[vertex][0] / self.history[vertex][1]
-            intervention_value = self.current_risk[vertex] * (1 + intervention_freq)
-            world_dict['Risk'].append(intervention_value)
+            world_dict['Unvisited'].append(max(0.1, self.unchecked[vertex]))
+            world_dict['Risk'].append(self.risk_values[vertex])
             world_dict['Value'].append(self.vertex_values[vertex])
-            world_dict['Robot'].append(self.state == vertex)
-        df = pd.DataFrame.from_dict(world_dict)
-        df.to_csv('world_state.csv', index=False)
+
+        world_dict['Robot'] = self.state
+        world_dict['plan'] = self.plan
+
+        with open(f'world_state.json', 'w') as f:
+            json.dump(world_dict, f)
 
     def read_weights(self):
+        """Read new weights from a file.
+
+        Raises:
+            FileNotFoundError: When the file does not exist.
+        """
         try:
-            weight_df = pd.read_csv('weights.csv')
-            weights = weight_df.iloc[0].tolist()
-            self.weights = self.normalise_weights(weights)
-        except Exception:
+            with open('weights.json') as f:
+                weights_dict = json.load(f)
+            self.weights = self.normalise_weights(weights_dict['weights'])
+        except FileNotFoundError:
             pass
 
     def monitor(self):
+        """Continuously monitor the environment."""
         keep_monitoring = True
+
         while keep_monitoring:
             self.read_weights()
             endpoint = self.next_endpoint()
             self.update_edge_weights()
-            plan = self.get_plan(endpoint)
-            keep_monitoring = self.execute_plan(plan)
+            self.get_plan(endpoint)
+            keep_monitoring = self.execute_plan()

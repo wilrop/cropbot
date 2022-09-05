@@ -1,7 +1,4 @@
-import serial
-import time
 from cropbot import CropBot
-import os
 
 
 def main():
