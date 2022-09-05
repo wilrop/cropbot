@@ -3,7 +3,6 @@ import json
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-
 from dash import Dash, html, dcc, Input, Output, State, callback_context
 
 # Bulma stylesheet
