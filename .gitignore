@@ -2,3 +2,4 @@
 __pycache__/
 lego-hub-tk-main/
 *.csv
+*.json
