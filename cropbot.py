@@ -23,10 +23,10 @@ class CropBot:
         self.prev = None
         self.plan = []
 
-        self.serial_port = '/dev/ttys002'
+        self.serial_port = '/dev/ttys001'
         self.driver = serial.Serial(self.serial_port)
         self.directions = {(0, 0): 'stay', (0, 1): 'forward', (0, -1): 'backward', (-1, 0): 'left', (1, 0): 'right'}
-        self.driver_delay = 15
+        self.driver_delay = 10
 
         self.graph = nx.grid_2d_graph(width, height).to_directed()
         self.edge_values = defaultdict(int)
@@ -100,7 +100,7 @@ class CropBot:
         conditional_freqs = {}
         for vertex in self.graph:
             conditional_freqs[vertex] = {}
-            for neighbour in self.graph.neighors(vertex):
+            for neighbour in self.graph.neighbors(vertex):
                 conditional_freqs[vertex][neighbour] = np.zeros(2)
         return conditional_freqs
 
@@ -120,6 +120,16 @@ class CropBot:
 
     @staticmethod
     def normalise_scalar(x, min_x, max_x):
+        """Normalise a scalar in a range.
+
+        Args:
+            x (float): The value to normalise.
+            min_x (float): The minimum value of x.
+            max_x (float): The maximum value of x.
+
+        Returns:
+            float: The normalised value.
+        """
         return x if x == 0 else (x - min_x) / (max_x - min_x)
 
     def get_active_neighbours(self, vertex):
@@ -386,13 +396,13 @@ class CropBot:
             if not response:
                 return self.command_driver(direction)
 
-            print('The response: ' + res_str)
+            print('The response: ' + response)
             try:
-                if res_str.startswith('ERROR'):
+                if response.startswith('ERROR'):
                     print('Encountered an error, retrying...')
                     return self.command_driver(direction)
                 else:
-                    res_dict = json.loads(res_str)
+                    res_dict = json.loads(response)
                     break
             except Exception as e:
                 raise Exception(e)
