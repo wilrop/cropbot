@@ -1,4 +1,5 @@
 import json
+import math
 import time
 
 import hub
@@ -19,29 +20,31 @@ class Driver:
 
         self.drive_sleep = 3
         self.flip_sleep = 1.5
-        self.turn_sleep = 2
+        self.turn_sleep = 2.5
         self.color_sleep = 0.01
 
-        self.drive_vertical_degrees = 420
-        self.drive_horizontal_degrees = 375
+        self.drive_vertical_degrees = 400
+        self.drive_horizontal_degrees = 400
         self.drive_adapt_degrees = 50
-        self.flip_degrees = 100
-        self.turn_degrees = 114
+        self.flip_degrees = 108
+        self.left_turn_degrees = 108
+        self.right_turn_degrees = 105
 
         self.move_speed = 20
         self.flip_speed = 10
-        self.turn_speed = -20
+        self.turn_speed = -10
+        self.reset_speed = 10
 
         self.front_straight = True
         self.orientation = 'forward'
-        self.horizontal = ['left', 'right']
-        self.vertical = ['forward', 'backward']
+        self.horizontal = {'left', 'right'}
+        self.vertical = {'forward', 'backward'}
+        self.swap_direction = {'left': 'right', 'right': 'left', 'forward': 'backward', 'backward': 'forward'}
         self.color_checks = color_checks
         self.commands = {'stop', 'scan', 'forward', 'backward', 'left', 'right'}
         self.bt = hub.BT_VCP()
 
-    @staticmethod
-    def decode_command(byte_command):
+    def decode_command(self, byte_command):
         """Decode an incoming command from CropBot.
 
         Args:
@@ -51,7 +54,10 @@ class Driver:
             str: The direction to drive into.
         """
         command = byte_command.decode('utf-8').strip('\n')
-        return command
+        if command in self.commands:
+            return command
+        else:
+            raise ValueError
 
     @staticmethod
     def format_response(success, color):
@@ -81,6 +87,14 @@ class Driver:
         byte_response = response_str.encode('utf-8')
         return byte_response
 
+    def reset_motor_angles(self):
+        """Compensate the offset of a motor angle every time it wants to drive."""
+        offset_left = self.motor_left_turn.get()[2]
+        offset_right = self.motor_right_turn.get()[2]
+
+        self.motor_left_turn.run_for_degrees(offset_left, speed=-math.copysign(self.reset_speed, offset_left))
+        self.motor_right_turn.run_for_degrees(offset_right, speed=-math.copysign(self.reset_speed, offset_right))
+
     def flip_turn_wheels(self):
         """Flip the turn wheels to make turning or driving possible."""
         self.turn_pair.run_for_degrees(self.flip_degrees, speed_0=self.flip_speed, speed_1=-self.flip_speed)
@@ -97,28 +111,30 @@ class Driver:
             str: The new direction the driver should move to.
         """
         if direction == 'left':
-            speed = -self.turn_speed
-            new_direction = 'forward'
+            speed = self.turn_speed
+            turn_degrees = self.left_turn_degrees
         elif direction == 'right':
             speed = -self.turn_speed
-            new_direction = 'forward'
-        elif self.orientation == 'left':
-            speed = self.turn_speed
-            new_direction = direction
+            turn_degrees = self.right_turn_degrees
         else:
-            speed = -self.turn_speed
-            new_direction = direction
+            raise ValueError
 
-        self.drive_pair.run_for_degrees(self.turn_degrees, speed_0=speed, speed_1=speed)
+        self.drive_pair.run_for_degrees(turn_degrees, speed_0=speed, speed_1=speed)
         time.sleep(self.turn_sleep)
-        return new_direction
 
-    def turn(self, direction):
+    def turn(self, direction, new_orientation):
+        """Turn the driver in a specific direction.
+
+        Args:
+            direction (str): The direction to turn into.
+
+        Returns:
+            str: The new direction that the robot should drive into to drive into the originally requested direction.
+        """
         self.flip_turn_wheels()
-        new_direction = self.turn_driver(direction)
+        self.turn_driver(direction)
         self.flip_turn_wheels()
-        self.orientation = direction
-        return new_direction
+        self.orientation = new_orientation
 
     def drive(self, direction):
         """Drive into a specified direction.
@@ -138,6 +154,7 @@ class Driver:
             speed_0 = -self.move_speed
             speed_1 = self.move_speed
 
+        self.reset_motor_angles()
         self.drive_pair.run_for_degrees(degrees, speed_0=speed_0, speed_1=speed_1)
         time.sleep(self.drive_sleep)
 
@@ -150,12 +167,23 @@ class Driver:
         Returns:
             bool: Always assumes the move succeeded.
         """
-        if not all(x in self.horizontal for x in [self.orientation, direction]):
-            new_direction = self.turn(direction)
-        elif not all(x in self.vertical for x in [self.orientation, direction]):
-            new_direction = self.turn(direction)
-        else:
+        if direction in self.horizontal and self.orientation in self.horizontal:  # Direction & orientation horizontal.
+            if self.orientation == direction:
+                new_direction = 'forward'
+            else:
+                new_direction = 'backward'
+        elif direction in self.horizontal:  # Direction horizontal and front facing.
+            self.turn(direction, direction)
+            new_direction = 'forward'
+        elif self.orientation in self.vertical:  # If direction and orientation are forward.
             new_direction = direction
+        elif self.orientation in self.horizontal:  # If orientation is horizontal, turn in the opposite direction.
+            turn_direction = self.swap_direction[self.orientation]
+            self.turn(turn_direction, 'forward')
+            new_direction = direction
+        else:
+            raise ValueError
+
         self.drive(new_direction)
         return True
 
@@ -208,19 +236,6 @@ class Driver:
                 hub.display.show(hub.Image.SAD)
 
 
-def drive_demo(direction):
-    driver = Driver()
-    driver.move(direction)
-
-
-def square_demo():
-    driver = Driver()
-    driver.move('forward')
-    driver.move('right')
-    driver.move('backward')
-    driver.move('left')
-
-
 def check_color():
     driver = Driver()
     while 1:
@@ -229,12 +244,33 @@ def check_color():
         time.sleep(1)
 
 
+def turn_demo():
+    driver = Driver()
+    driver.turn('right', 'right')
+    driver.turn('left', 'forward')
+
+
+def drive_demo(direction):
+    driver = Driver()
+    driver.move(direction)
+
+
+def square_demo(squares=1):
+    driver = Driver()
+    for _ in range(squares):
+        driver.move('forward')
+        driver.move('right')
+        driver.move('backward')
+        driver.move('left')
+
+
 def listen():
     driver = Driver()
     driver.listen()
 
 
-# drive_demo('right')
-# square_demo()
 # check_color()
+# turn_demo()
+# drive_demo('right')
+# square_demo(2)
 listen()
