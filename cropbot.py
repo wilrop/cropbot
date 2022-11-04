@@ -15,15 +15,15 @@ class CropBot:
     """
 
     def __init__(self, width, height, weights, start=(0, 0), prior_risk=0.1, prior_conditional_risk=0.5,
-                 empirical_threshold=10):
+                 empirical_threshold=10, field=None):
+        self.field = field
         self.width = width
         self.height = height
         self.weights = self.normalise_weights(weights)
         self.state = start
         self.prev = None
-        self.plan = []
 
-        self.serial_port = '/dev/ttys001'
+        self.serial_port = '/dev/ttys015'
         self.driver = serial.Serial(self.serial_port)
         self.directions = {(0, 0): 'stay', (0, 1): 'forward', (0, -1): 'backward', (-1, 0): 'left', (1, 0): 'right'}
         self.driver_delay = 10
@@ -41,6 +41,9 @@ class CropBot:
         self.empirical_threshold = empirical_threshold
         self.prior_risk = prior_risk
         self.prior_conditional_risk = prior_conditional_risk
+
+        self.plan = self.get_plan(self.state)
+        self.next_plan = []
 
         self.log_world_state()
 
@@ -134,6 +137,9 @@ class CropBot:
 
     def get_active_neighbours(self, vertex):
         """Get the neighbours who have active interventions.
+
+        Args:
+            vertex (Tuple[int]): The coordinates of the vertex.
 
         Returns:
             List[Tuple[int]]: A tuple of active neighbours.
@@ -234,8 +240,7 @@ class CropBot:
         self.unchecked += 1
         self.unchecked[self.state] = 0
 
-    @staticmethod
-    def classify_color(color):
+    def classify_color(self, color):
         """Classify an observed color by the driver.
 
         Args:
@@ -244,6 +249,9 @@ class CropBot:
         Returns:
             str: A classification of the possible risk.
         """
+        if self.field is not None:
+            color = self.field[self.state]
+
         if color == 'red':
             return 'diseased'
         elif color == 'yellow':
@@ -277,24 +285,29 @@ class CropBot:
 
         self.intervention_freqs[self.state][1] += 1
 
-    def get_plan(self, target):
+    def get_plan(self, start):
         """Compute the optimal trajectory from the current state to a given target.
 
         Args:
-            target (Tuple[int]): The required end state.
+            start (Tuple[int]): The starting state for the plan.
         """
-        self.plan = nx.astar_path(self.graph, self.state, target, self.get_weight_for_edge)[1:]
+        self.update_vertex_values()
+        vertex_values = copy.deepcopy(self.vertex_values)
+        del vertex_values[start]
+        target = max(vertex_values, key=vertex_values.get)
+        return nx.astar_path(self.graph, start, target, self.get_weight_for_edge)[1:]
 
-    def get_direction_from_next(self, next_state):
+    def get_direction_from_next(self, state, next_state):
         """Determine the direction to move from the next state.
 
         Args:
+            state (Tuple[int]): The start state.
             next_state (Tuple[int]): The next state.
 
         Returns:
             str: The direction to move into.
         """
-        move_tpl = tuple(np.array(next_state) - np.array(self.state))
+        move_tpl = tuple(np.array(next_state) - np.array(state))
         return self.directions[move_tpl]
 
     def read_buffer(self, return_dict):
@@ -307,16 +320,19 @@ class CropBot:
         return_dict['response'] = driver.readline()
 
     @staticmethod
-    def encode_command(command):
+    def encode_command(direction, next_direction):
         """Encode a command for the driver.
 
         Args:
-            command (str): The command to send to the driver.
+            direction (str): The direction to move into.
+            next_direction (str): The next direction to move into.
 
         Returns:
             bytes: An encoded command.
         """
-        return command.encode('utf-8')
+        command_dict = {'direction': direction, 'next': next_direction}
+        command_str = json.dumps(command_dict) + '\n'
+        return command_str.encode('utf-8')
 
     @staticmethod
     def decode_response(byte_response):
@@ -338,7 +354,7 @@ class CropBot:
             res_str (str): A driver response as a string.
 
         Returns:
-                str: A response string stripped of useless info and trailing symbols.
+            str: A response string stripped of useless info and trailing symbols.
         """
         if not res_str.endswith('\n'):
             return False
@@ -348,29 +364,17 @@ class CropBot:
 
         return res_str.strip('\n')
 
-    @staticmethod
-    def format_command(command):
-        """Format a command for the driver.
-
-        Args:
-            command (str): A command for the driver.
-
-        Returns:
-            str: A command with a trailing newline added.
-        """
-        return command + '\n'
-
-    def command_driver(self, direction):
+    def command_driver(self, direction, next_direction):
         """Command the driver to move in a specific direction.
 
         Args:
             direction (str): The direction to move into.
+            next_direction (str): The next direction to move into.
 
         Returns:
             Dict: A response dictionary.
         """
-        formatted_direction = self.format_command(direction)
-        encoded_direction = self.encode_command(formatted_direction)
+        encoded_direction = self.encode_command(direction, next_direction)
         self.driver.write(encoded_direction)
         self.driver.flush()
         print('The command: ' + direction)
@@ -386,7 +390,7 @@ class CropBot:
                 print('Failed to respond, retrying...')
                 p.terminate()
                 p.join()
-                return self.command_driver(direction)
+                return self.command_driver(direction, next_direction)
             else:
                 byte_response = return_dict['response']
 
@@ -394,13 +398,13 @@ class CropBot:
             response = self.format_response(res_str)
 
             if not response:
-                return self.command_driver(direction)
+                return self.command_driver(direction, next_direction)
 
             print('The response: ' + response)
             try:
                 if response.startswith('ERROR'):
                     print('Encountered an error, retrying...')
-                    return self.command_driver(direction)
+                    return self.command_driver(direction, next_direction)
                 else:
                     res_dict = json.loads(response)
                     break
@@ -411,9 +415,17 @@ class CropBot:
     def execute_plan(self):
         """Execute the current monitoring plan."""
         while self.plan:
+            self.log_world_state()
             next_state = self.plan.pop(0)
-            direction = self.get_direction_from_next(next_state)
-            res_dict = self.command_driver(direction)
+            if self.plan:
+                next_next_state = self.plan[0]
+            else:
+                self.next_plan = self.get_plan(next_state)
+                next_next_state = self.next_plan[0]
+
+            direction = self.get_direction_from_next(self.state, next_state)
+            next_direction = self.get_direction_from_next(next_state, next_next_state)
+            res_dict = self.command_driver(direction, next_direction)
 
             if res_dict['success']:
                 self.prev = self.state
@@ -421,21 +433,9 @@ class CropBot:
                 self.update_model(res_dict)
                 self.update_unchecked()
                 self.risk_values = {vertex: self.compute_risk_prob(vertex) for vertex in self.graph}
-                self.log_world_state()
             else:
                 return False
         return True
-
-    def next_endpoint(self):
-        """Compute the next endpoint.
-
-        Returns:
-            Tuple[int]: The optimal end vertex.
-        """
-        self.update_vertex_values()
-        vertex_values = copy.deepcopy(self.vertex_values)
-        del vertex_values[self.state]
-        return max(vertex_values, key=vertex_values.get)
 
     def log_world_state(self):
         """Log the world state for visualisation by the dashboard."""
@@ -473,7 +473,6 @@ class CropBot:
 
         while keep_monitoring:
             self.read_weights()
-            endpoint = self.next_endpoint()
             self.update_edge_weights()
-            self.get_plan(endpoint)
             keep_monitoring = self.execute_plan()
+            self.plan = self.next_plan

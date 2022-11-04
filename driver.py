@@ -18,23 +18,24 @@ class Driver:
         self.turn_pair = self.motor_left_turn.pair(self.motor_right_turn)
         self.drive_pair = self.motor_left_drive.pair(self.motor_right_drive)
 
-        self.drive_sleep = 3
+        self.drive_sleep = 2.75
         self.flip_sleep = 1.5
         self.turn_sleep = 2.5
         self.color_sleep = 0.01
 
-        self.drive_vertical_degrees = 400
-        self.drive_horizontal_degrees = 400
-        self.drive_adapt_degrees = 50
+        self.drive_vertical_degrees = 215
+        self.drive_horizontal_degrees = 215
+        self.drive_adapt_degrees = 80
         self.flip_degrees = 108
-        self.left_turn_degrees = 108
-        self.right_turn_degrees = 105
+        self.left_turn_degrees = 105
+        self.right_turn_degrees = 106
 
         self.move_speed = 20
         self.flip_speed = 10
         self.turn_speed = -10
         self.reset_speed = 10
 
+        self.turned = False
         self.front_straight = True
         self.orientation = 'forward'
         self.horizontal = {'left', 'right'}
@@ -54,8 +55,16 @@ class Driver:
             str: The direction to drive into.
         """
         command = byte_command.decode('utf-8').strip('\n')
-        if command in self.commands:
-            return command
+
+        try:
+            command_dict = json.loads(command)
+            direction = command_dict['direction']
+            next_direction = command_dict['next']
+        except json.decoder.JSONDecodeError:
+            raise json.decoder.JSONDecodeError
+
+        if direction in self.commands and next_direction in self.commands:
+            return direction, next_direction
         else:
             raise ValueError
 
@@ -127,6 +136,7 @@ class Driver:
 
         Args:
             direction (str): The direction to turn into.
+            new_orientation (str): The orientation after turning.
 
         Returns:
             str: The new direction that the robot should drive into to drive into the originally requested direction.
@@ -135,17 +145,45 @@ class Driver:
         self.turn_driver(direction)
         self.flip_turn_wheels()
         self.orientation = new_orientation
+        self.turned = True
 
-    def drive(self, direction):
+    def needs_turn(self, direction):
+        """Check whether a direction will need a turn.
+
+        Args:
+            direction (str): The direction to turn into.
+
+        Returns:
+            bool: Whether this direction requires a turn or not.
+        """
+        if self.orientation in self.vertical and direction in self.horizontal:
+            return True
+        elif self.orientation in self.horizontal and direction in self.vertical:
+            return True
+        else:
+            return False
+
+    def drive(self, direction, next_direction):
         """Drive into a specified direction.
 
         Args:
             direction (str): The direction to drive to.
+            next_direction (str): The next direction to drive to.
         """
         if self.orientation in self.horizontal:  # Todo: Add adapt degrees.
             degrees = self.drive_horizontal_degrees
         else:
             degrees = self.drive_vertical_degrees
+
+        if self.turned:
+            self.turned = False
+            if direction == 'forward':
+                degrees -= self.drive_adapt_degrees
+            else:
+                degrees += self.drive_adapt_degrees
+
+        if self.needs_turn(next_direction):
+            degrees += self.drive_adapt_degrees
 
         if direction == 'forward':
             speed_0 = self.move_speed
@@ -158,11 +196,12 @@ class Driver:
         self.drive_pair.run_for_degrees(degrees, speed_0=speed_0, speed_1=speed_1)
         time.sleep(self.drive_sleep)
 
-    def move(self, direction):
+    def move(self, direction, next_direction):
         """Move the driver to a new location.
 
         Args:
             direction (str): The direction to move to.
+            next_direction (str): The next direction to move to.
 
         Returns:
             bool: Always assumes the move succeeded.
@@ -184,7 +223,7 @@ class Driver:
         else:
             raise ValueError
 
-        self.drive(new_direction)
+        self.drive(new_direction, next_direction)
         return True
 
     def detect_color(self):
@@ -201,7 +240,7 @@ class Driver:
         return most_frequent_color
 
     def execute_command(self, command):
-        """Execute an incomming command.
+        """Execute an incoming command.
 
         Args:
             command (bytes): A command from CropBot.
@@ -209,8 +248,8 @@ class Driver:
         Returns:
             bytes: A response with the driving success and observed color.
         """
-        command = self.decode_command(command)
-        success = self.move(command)
+        direction, next_direction = self.decode_command(command)
+        success = self.move(direction, next_direction)
         color = self.detect_color()
         response_dict = self.format_response(success, color)
         byte_response = self.encode_response(response_dict)
@@ -252,16 +291,15 @@ def turn_demo():
 
 def drive_demo(direction):
     driver = Driver()
-    driver.move(direction)
+    driver.move(direction, 'stay')
 
 
 def square_demo(squares=1):
     driver = Driver()
+    commands = ['forward', 'right', 'backward', 'left', 'stay']
     for _ in range(squares):
-        driver.move('forward')
-        driver.move('right')
-        driver.move('backward')
-        driver.move('left')
+        for command, next_command in zip(commands, commands[1:]):
+            driver.move(command, next_command)
 
 
 def listen():
