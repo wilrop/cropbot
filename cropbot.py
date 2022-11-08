@@ -23,7 +23,7 @@ class CropBot:
         self.state = start
         self.prev = None
 
-        self.serial_port = '/dev/ttys015'
+        self.serial_port = '/dev/ttys013'
         self.driver = serial.Serial(self.serial_port)
         self.directions = {(0, 0): 'stay', (0, 1): 'forward', (0, -1): 'backward', (-1, 0): 'left', (1, 0): 'right'}
         self.driver_delay = 10
@@ -151,7 +151,7 @@ class CropBot:
                 active_neighbours.append(neighbour)
         return active_neighbours
 
-    def compute_prob(self, interventions, total):
+    def compute_prob(self, interventions, total, conditional=False):
         """Compute the empirical probability for an intervention over a total if the total exceeds the threshold.
 
         Args:
@@ -164,7 +164,10 @@ class CropBot:
         if total >= self.empirical_threshold:
             risk_prob = interventions / total
         else:
-            risk_prob = self.prior_risk
+            if conditional:
+                risk_prob = self.prior_conditional_risk
+            else:
+                risk_prob = self.prior_risk
         return risk_prob
 
     def compute_risk_prob(self, vertex):
@@ -188,12 +191,12 @@ class CropBot:
                 interventions, total = self.intervention_freqs[neighbour]
                 conditional_interventions, conditional_total = self.conditional_freqs[neighbour][vertex]
                 neighbours_probs.append(self.compute_prob(interventions, total))
-                conditional_neighbours_probs.append(self.compute_prob(conditional_interventions, conditional_total))
+                conditional_neighbours_probs.append(self.compute_prob(conditional_interventions, conditional_total, conditional=True))
 
             neighbours_risk_prob = np.prod(neighbours_probs)
             conditional_risk_prob = np.prod(conditional_neighbours_probs)
-
             conditional_risk = conditional_risk_prob * risk_prob / neighbours_risk_prob
+            conditional_risk = min(conditional_risk, 0.95)
             return conditional_risk
         else:
             return risk_prob
