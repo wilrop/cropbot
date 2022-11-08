@@ -67,8 +67,8 @@ def make_world_state_figure(old_fig):
                          size='Unvisited',
                          hover_data={'X': False,
                                      'Y': False,
-                                     'Unvisited': False,
-                                     'Risk': False,
+                                     'Unvisited': True,
+                                     'Risk': True,
                                      'Value': True},
                          color_continuous_scale=px.colors.sequential.Cividis_r,
                          range_color=(0, 1))
